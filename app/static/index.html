@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FastAPI LLM Stream Chat</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --user-bg: #2563eb;
+      --bot-bg: #1e293b;
+      --error-bg: #450a0a;
+      --error-text: #fca5a5;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; }
+    .config {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+    #apiUrl { width: 320px; max-width: 100%; }
+    #apiKey { width: 180px; }
+    #chat {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-width: 860px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    .msg {
+      max-width: 80%;
+      padding: 12px 16px;
+      border-radius: 12px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-size: 0.95rem;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: var(--user-bg);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg.bot {
+      align-self: flex-start;
+      background: var(--bot-bg);
+      border: 1px solid var(--border);
+      border-bottom-left-radius: 4px;
+    }
+    .msg.error {
+      align-self: flex-start;
+      background: var(--error-bg);
+      color: var(--error-text);
+      border: 1px solid #7f1d1d;
+    }
+    .meta {
+      margin-top: 8px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    footer {
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      padding: 14px 20px;
+    }
+    form {
+      max-width: 860px;
+      margin: 0 auto;
+      display: flex;
+      gap: 10px;
+    }
+    #prompt {
+      flex: 1;
+      padding: 12px 14px;
+      font-size: 0.95rem;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 0 20px;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--accent-hover); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>FastAPI LLM Stream UI</h1>
+    <div class="config">
+      <input id="apiUrl" type="text" placeholder="Endpoint URL" />
+      <input id="apiKey" type="password" placeholder="Enter X-API-Key" />
+    </div>
+  </header>
+
+  <main id="chat">
+    <div class="msg bot">Enter your X-API-Key above and send a prompt to stream responses live.</div>
+  </main>
+
+  <footer>
+    <form id="chatForm">
+      <input id="prompt" type="text" placeholder="Type a prompt..." autocomplete="off" required />
+      <button id="sendBtn" type="submit">Send</button>
+    </form>
+  </footer>
+
+  <script>
+    const DEFAULT_RENDER_URL = "https://fastapi-llm-app-5z87.onrender.com/api/v1/chat/stream";
+    const apiUrlInput = document.getElementById("apiUrl");
+    const apiKeyInput = document.getElementById("apiKey");
+    const chatBox = document.getElementById("chat");
+    const chatForm = document.getElementById("chatForm");
+    const promptInput = document.getElementById("prompt");
+    const sendBtn = document.getElementById("sendBtn");
+
+    // Auto-select same-origin endpoint when hosted, or Render URL when opened as a local file
+    apiUrlInput.value = window.location.protocol.startsWith("http") && !window.location.hostname.includes("127.0.0.1") && !window.location.hostname.includes("localhost")
+      ? `${window.location.origin}/api/v1/chat/stream`
+      : DEFAULT_RENDER_URL;
+
+    apiKeyInput.value = localStorage.getItem("llm_api_key") || "";
+    apiKeyInput.addEventListener("input", () => {
+      localStorage.setItem("llm_api_key", apiKeyInput.value.trim());
+    });
+
+    function appendMessage(text, role) {
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      div.textContent = text;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+      return div;
+    }
+
+    chatForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const prompt = promptInput.value.trim();
+      const apiKey = apiKeyInput.value.trim();
+      const url = apiUrlInput.value.trim();
+
+      if (!prompt) return;
+      if (!apiKey) {
+        appendMessage("Please enter your X-API-Key in the top bar first.", "error");
+        return;
+      }
+
+      appendMessage(prompt, "user");
+      promptInput.value = "";
+      promptInput.disabled = true;
+      sendBtn.disabled = true;
+
+      const botDiv = appendMessage("Connecting (Render Free Tier cold starts may take ~50s)...", "bot");
+      const startTime = performance.now();
+
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-API-Key": apiKey
+          },
+          body: JSON.stringify({ prompt })
+        });
+
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}`;
+          if (response.status === 403) detail = "403 Forbidden: Invalid X-API-Key.";
+          if (response.status === 429) detail = "429 Too Many Requests: Rate limit (5/min) exceeded. Wait a minute.";
+          botDiv.className = "msg error";
+          botDiv.textContent = detail;
+          return;
+        }
+
+        const cacheHeader = response.headers.get("x-cache") || "N/A";
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        let fullText = "";
+        botDiv.textContent = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop();
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data: ")) continue;
+            const payload = trimmed.slice(6);
+            if (payload === "[DONE]") continue;
+            fullText += payload;
+            botDiv.textContent = fullText;
+            chatBox.scrollTop = chatBox.scrollHeight;
+          }
+        }
+
+        if (!fullText) {
+          botDiv.className = "msg error";
+          botDiv.textContent = "Stream ended with no content. Check Render logs for API errors.";
+        } else {
+          const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = `Time: ${elapsed}s | X-Cache: ${cacheHeader}`;
+          botDiv.appendChild(meta);
+        }
+      } catch (err) {
+        botDiv.className = "msg error";
+        botDiv.textContent = `Network / CORS error: ${err.message}`;
+      } finally {
+        promptInput.disabled = false;
+        sendBtn.disabled = false;
+        promptInput.focus();
+      }
+    });
+  </script>
+</body>
+</html>
