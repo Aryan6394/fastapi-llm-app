@@ -18,7 +18,8 @@ def is_prompt_cached(prompt: str) -> bool:
 
 async def generate_stream(prompt: str):
     """
-    Async generator that yields SSE chunks, serving from TTL cache on repeat prompts.
+    Async generator that yields SSE chunks from Gemini 3.8 Flash,
+    serving from TTL cache on repeat prompts and surfacing stream errors cleanly.
     """
     cache_key = normalize_prompt(prompt)
 
@@ -27,18 +28,24 @@ async def generate_stream(prompt: str):
         yield "data: [DONE]\n\n"
         return
 
-    response = await client.aio.models.generate_content_stream(
-        model="gemini-3.8-flash",
-        contents=prompt,
-    )
+    try:
+        response = await client.aio.models.generate_content_stream(
+            model="gemini-3.8-flash",
+            contents=prompt,
+        )
 
-    full_response = []
-    async for chunk in response:
-        if chunk.text:
-            full_response.append(chunk.text)
-            yield f"data: {chunk.text}\n\n"
+        full_response = []
+        async for chunk in response:
+            if chunk.text:
+                full_response.append(chunk.text)
+                yield f"data: {chunk.text}\n\n"
 
-    if full_response:
-        prompt_cache[cache_key] = "".join(full_response)
+        if full_response:
+            prompt_cache[cache_key] = "".join(full_response)
+
+    except Exception as exc:
+        error_msg = f"[ERROR] {type(exc).__name__}: {exc}"
+        print(f"GEMINI STREAM ERROR: {error_msg}", flush=True)
+        yield f"data: {error_msg}\n\n"
 
     yield "data: [DONE]\n\n"
