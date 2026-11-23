@@ -28,7 +28,7 @@ async def generate_stream(prompt: str):
         return
 
     response = await client.aio.models.generate_content_stream(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
     )
 
