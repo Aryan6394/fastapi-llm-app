@@ -3,17 +3,21 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 
-def get_client_ip(request: Request) -> str:
-    """Extract the real client IP behind Cloudflare / Render reverse proxies."""
+def get_rate_limit_key(request: Request) -> str:
+    """Rate-limit by X-API-Key first so reverse-proxy IPs never split buckets."""
+    api_key = request.headers.get("x-api-key")
+    if api_key:
+        return f"key:{api_key.strip()}"
+
     cf_ip = request.headers.get("cf-connecting-ip")
     if cf_ip:
-        return cf_ip.strip()
+        return f"ip:{cf_ip.strip()}"
 
     forwarded_for = request.headers.get("x-forwarded-for")
     if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
+        return f"ip:{forwarded_for.split(',')[0].strip()}"
 
-    return get_remote_address(request)
+    return f"ip:{get_remote_address(request)}"
 
 
-limiter = Limiter(key_func=get_client_ip)
+limiter = Limiter(key_func=get_rate_limit_key)
