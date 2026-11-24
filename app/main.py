@@ -7,6 +7,7 @@ from slowapi.errors import RateLimitExceeded
 from app.api.chat import router as chat_router
 from app.core.config import settings
 from app.core.limiter import limiter
+from app.core.middleware import StructuredLoggingMiddleware
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -15,6 +16,7 @@ app = FastAPI(
     redoc_url=None,
 )
 
+app.add_middleware(StructuredLoggingMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,11 +33,9 @@ async def serve_chat_ui():
     return FileResponse(STATIC_DIR / "index.html")
 
 
-# Register rate limiter
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Attach the chat endpoints
 app.include_router(chat_router, prefix=settings.API_V1_STR, tags=["Chat"])
 
 
