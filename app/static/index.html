@@ -191,8 +191,7 @@
 
       appendMessage(prompt, "user");
       promptInput.value = "";
-      promptInput.disabled = true;
-      sendBtn.disabled = true;
+      promptInput.focus();
 
       const botDiv = appendMessage("Connecting (Render Free Tier cold starts may take ~50s)...", "bot");
       const startTime = performance.now();
@@ -221,7 +220,7 @@
         const decoder = new TextDecoder("utf-8");
         let buffer = "";
         let fullText = "";
-        botDiv.textContent = "";
+        botDiv.textContent = "Waiting for Gemini tokens...";
 
         while (true) {
           const { value, done } = await reader.read();
@@ -234,9 +233,18 @@
           for (const line of lines) {
             const trimmed = line.trim();
             if (!trimmed.startsWith("data: ")) continue;
-            const payload = trimmed.slice(6);
-            if (payload === "[DONE]") continue;
-            fullText += payload;
+            const rawPayload = trimmed.slice(6);
+            if (rawPayload === "[DONE]") continue;
+
+            let token = rawPayload;
+            try {
+              token = JSON.parse(rawPayload);
+            } catch {}
+
+            if (token.startsWith("[ERROR]")) {
+              botDiv.className = "msg error";
+            }
+            fullText += token;
             botDiv.textContent = fullText;
             chatBox.scrollTop = chatBox.scrollHeight;
           }
@@ -255,10 +263,6 @@
       } catch (err) {
         botDiv.className = "msg error";
         botDiv.textContent = `Network / CORS error: ${err.message}`;
-      } finally {
-        promptInput.disabled = false;
-        sendBtn.disabled = false;
-        promptInput.focus();
       }
     });
   </script>
