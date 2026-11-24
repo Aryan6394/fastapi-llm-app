@@ -1,3 +1,4 @@
+import json
 from cachetools import TTLCache
 from google import genai
 from google.genai.errors import APIError
@@ -8,7 +9,7 @@ client = genai.Client(api_key=settings.GEMINI_API_KEY)
 # Cache up to 100 unique prompts for 10 minutes (600 seconds)
 prompt_cache: TTLCache = TTLCache(maxsize=100, ttl=600)
 
-PRIMARY_MODEL = "gemini-3.8-flash"
+active_model = "gemini-3.8-flash"
 EXCLUDED_KEYWORDS = ("image", "tts", "audio", "embedding", "robotics", "computer-use")
 
 
@@ -21,7 +22,7 @@ def is_prompt_cached(prompt: str) -> bool:
 
 
 async def get_fallback_flash_models(exclude_model: str) -> list[str]:
-    """Dynamically discovers other available Gemini Flash text models on the API key."""
+    """Discovers other available Gemini Flash text models on the API key."""
     fallbacks: list[str] = []
     try:
         pager = await client.aio.models.list()
@@ -45,17 +46,18 @@ async def get_fallback_flash_models(exclude_model: str) -> list[str]:
 
 async def generate_stream(prompt: str):
     """
-    Streams SSE chunks from Gemini with TTL caching and automatic fallback
-    across available Flash models when the primary model returns 503/404.
+    Streams JSON-encoded SSE chunks from Gemini with TTL caching and
+    sticky fallback across available Flash models on 503/404 errors.
     """
+    global active_model
     cache_key = normalize_prompt(prompt)
 
     if cache_key in prompt_cache:
-        yield f"data: {prompt_cache[cache_key]}\n\n"
+        yield f"data: {json.dumps(prompt_cache[cache_key])}\n\n"
         yield "data: [DONE]\n\n"
         return
 
-    candidate_models = [PRIMARY_MODEL]
+    candidate_models = [active_model]
     last_error = None
 
     idx = 0
@@ -73,9 +75,10 @@ async def generate_stream(prompt: str):
             async for chunk in response:
                 if chunk.text:
                     full_response.append(chunk.text)
-                    yield f"data: {chunk.text}\n\n"
+                    yield f"data: {json.dumps(chunk.text)}\n\n"
 
             if full_response:
+                active_model = model_name
                 prompt_cache[cache_key] = "".join(full_response)
                 yield "data: [DONE]\n\n"
                 return
@@ -83,10 +86,9 @@ async def generate_stream(prompt: str):
         except APIError as exc:
             last_error = f"{type(exc).__name__} ({model_name}): {exc}"
             print(f"GEMINI STREAM RETRY: {last_error}", flush=True)
-            # Only fall back if no tokens were sent yet and the error is transient/unavailable
             if not full_response and exc.code in (404, 429, 500, 503):
                 if len(candidate_models) == 1:
-                    candidate_models.extend(await get_fallback_flash_models(PRIMARY_MODEL))
+                    candidate_models.extend(await get_fallback_flash_models(model_name))
                 continue
             break
 
@@ -95,5 +97,5 @@ async def generate_stream(prompt: str):
             print(f"GEMINI STREAM ERROR: {last_error}", flush=True)
             break
 
-    yield f"data: [ERROR] {last_error or 'No response generated from Gemini.'}\n\n"
+    yield f"data: {json.dumps('[ERROR] ' + (last_error or 'No response generated.'))}\n\n"
     yield "data: [DONE]\n\n"
