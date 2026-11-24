@@ -157,6 +157,76 @@ Returns service health status (`200 OK`):
   "service": "FastAPI LLM Microservice"
 }
 ```
+## End-to-End Project Demonstration
+
+Follow these steps to verify every security, performance, and observability feature on the live Render deployment (`https://fastapi-llm-app-5z87.onrender.com`).
+
+### Step 1: Verify Service Health & Latency Telemetry (`200 OK`)
+Confirm the container is awake and attaching the `X-Process-Time` middleware header:
+
+```bash
+curl -i [https://fastapi-llm-app-5z87.onrender.com/health](https://fastapi-llm-app-5z87.onrender.com/health)
+```
+
+* **Expected Result:** `HTTP/1.1 200 OK` with response header `x-process-time: <duration>ms` and JSON body:
+  ```json
+  {"status": "healthy", "service": "FastAPI LLM Microservice"}
+  ```
+
+---
+
+### Step 2: Verify API Key Authentication (`403 Forbidden`)
+Send a request without a valid `X-API-Key` header to confirm unauthorized callers are blocked:
+
+```bash
+curl -i -X POST "[https://fastapi-llm-app-5z87.onrender.com/api/v1/chat/stream](https://fastapi-llm-app-5z87.onrender.com/api/v1/chat/stream)" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: invalid-key" \
+  -d '{"prompt": "Hello"}'
+```
+
+* **Expected Result:** `HTTP/1.1 403 Forbidden` with `{"detail": "Could not validate API key"}`.
+
+---
+
+### Step 3: Demonstrate Live SSE Token Streaming (`200 OK` + `X-Cache: MISS`)
+1. Open the **Browser Chat UI** at [https://fastapi-llm-app-5z87.onrender.com/](https://fastapi-llm-app-5z87.onrender.com/) (or use `curl -N` below).
+2. Enter your `API_KEY` and send a new prompt (for example: `Explain caching in one sentence`).
+
+```bash
+curl -i -N -X POST "[https://fastapi-llm-app-5z87.onrender.com/api/v1/chat/stream](https://fastapi-llm-app-5z87.onrender.com/api/v1/chat/stream)" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -d '{"prompt": "Explain caching in one sentence"}'
+```
+
+* **Expected Result:**
+  * Response headers show `200 OK`, `content-type: text/event-stream`, and `x-cache: MISS`.
+  * Tokens stream live in real time (`data: "<chunk>"`) and terminate cleanly with `data: [DONE]`.
+
+---
+
+### Step 4: Demonstrate In-Memory TTL Prompt Caching (`X-Cache: HIT`)
+Send the **exact same prompt** (`Explain caching in one sentence`) a second time within the 10-minute TTL window:
+
+* **Expected Result:**
+  * Response header changes to `x-cache: HIT`.
+  * The cached completion returns almost instantaneously (`~0.15s`) from RAM (`cachetools.TTLCache`) without invoking the Gemini API.
+
+---
+
+### Step 5: Demonstrate Rate Limiting (`429 Too Many Requests`)
+Send the same request **6 times within 60 seconds** using the same `X-API-Key` (either by clicking **Send** repeatedly in the Chat UI or executing in Swagger UI at `/docs`):
+
+* **Expected Result:**
+  * Requests 1 through 5 succeed (`200 OK`).
+  * The **6th request** is intercepted by `slowapi` and returns `429 Too Many Requests` (`Rate limit exceeded: 5 per 1 minute`).
+
+---
+
+### Step 6: Verify Observability & CI Pipeline
+* **Structured JSON Logs:** In the Render dashboard **Logs** tab, each request emits a single-line JSON object containing `timestamp`, `method`, `path`, `status_code`, `latency_ms`, `x_cache`, and `client_ip`.
+* **Automated CI Tests:** Pushing any commit to `main` triggers the **FastAPI CI** workflow in GitHub Actions, running the offline `pytest` suite (`tests/test_api.py`) to validate `/health`, `403` auth, SSE streaming, `X-Cache` hits/misses, and `429` rate limits.
 
 ---
 
