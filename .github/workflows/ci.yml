@@ -20,6 +20,7 @@ jobs:
           pip install -r requirements.txt
       - name: Run pytest
         env:
+          PYTHONPATH: .
           API_KEY: test-secret-key
           GEMINI_API_KEY: test-gemini-key
-        run: pytest -v
+        run: python -m pytest -v
